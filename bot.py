@@ -1,6 +1,9 @@
 import asyncio
 import base64
 import requests
+import threading
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -140,7 +143,19 @@ async def on_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await ctx.bot.send_message(chat_id=update.effective_chat.id, text="تمام. اختر زر ثاني:", reply_markup=main_menu(dev))
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+    def log_message(self, *a): pass
+
+def run_health():
+    port = int(os.environ.get("PORT", 8080))
+    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
+
 def main():
+    threading.Thread(target=run_health, daemon=True).start()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(on_device, pattern=r"^dev:"))
